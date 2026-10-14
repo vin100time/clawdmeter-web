@@ -1,0 +1,14 @@
+# Local secrets — never commit (copy secrets.example.h to secrets.h instead)
+esp32/clawdmeter_oled/secrets.h
+
+# Python
+__pycache__/
+*.pyc
+
+# Arduino build output
+build/
+*.elf
+*.bin
+
+# Local Claude Code settings
+.claude/settings.local.json

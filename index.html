@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="format-detection" content="telephone=no">
+<title>Clawdmeter</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: #14121a;
+    color: #f4f1ea;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: none;
+    -webkit-user-select: none;
+    overflow: hidden;
+  }
+  #wrap {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    text-align: center;
+  }
+  #title {
+    margin-top: 14px;
+    font-size: 22px; font-weight: bold;
+    letter-spacing: 3px; color: #ff9b3d;
+    text-transform: uppercase;
+  }
+  #cat { display: block; margin: 4px auto 0 auto; }
+  .gauge { margin: 14px 7%; text-align: left; }
+  .grow { position: relative; height: 30px; }
+  .glabel { font-size: 18px; font-weight: bold; color: #cfc8bd; }
+  .gval { position: absolute; right: 0; top: -4px; font-size: 30px; font-weight: bold; }
+  .greset { font-size: 14px; color: #8b8478; margin-top: 2px; }
+  .bar {
+    margin-top: 6px; height: 22px; width: 100%;
+    background: #2a2733; border-radius: 11px; overflow: hidden;
+  }
+  .fill {
+    height: 100%; width: 0%;
+    border-radius: 11px;
+    -webkit-transition: width 0.6s ease, background-color 0.6s ease;
+    transition: width 0.6s ease, background-color 0.6s ease;
+  }
+  .dot {
+    display: inline-block; width: 13px; height: 13px;
+    border-radius: 50%; margin-left: 9px; vertical-align: middle;
+    background: #6f6a60;
+  }
+  .gauge.active .bar {
+    -webkit-box-shadow: 0 0 0 2px #ff9b3d, 0 0 14px rgba(255,155,61,0.6);
+    box-shadow: 0 0 0 2px #ff9b3d, 0 0 14px rgba(255,155,61,0.6);
+  }
+  .gauge.active .glabel:after {
+    content: " \25C0 actif";
+    color: #ff9b3d; font-size: 13px; font-weight: bold;
+    letter-spacing: 1px;
+  }
+  #banner {
+    display: none;
+    margin: 6px 7% 0 7%;
+    padding: 8px 10px; border-radius: 9px;
+    font-size: 17px; font-weight: bold;
+    background: #5a2a2a; color: #ffd9d9;
+  }
+  #foot {
+    position: absolute; left: 0; right: 0; bottom: 8px;
+    font-size: 13px; color: #6f6a60;
+  }
+  .offline #title { color: #6f6a60; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="title">Clawdmeter</div>
+  <div id="banner"></div>
+  <canvas id="cat" width="240" height="240"></canvas>
+
+  <div class="gauge" id="sgauge">
+    <div class="grow">
+      <span class="glabel">Session &middot; 5h<span class="dot" id="sdot"></span></span>
+      <span class="gval" id="sval">--%</span>
+    </div>
+    <div class="bar"><div class="fill" id="sfill"></div></div>
+    <div class="greset" id="sreset">&nbsp;</div>
+  </div>
+
+  <div class="gauge" id="wgauge">
+    <div class="grow">
+      <span class="glabel">Semaine &middot; 7j<span class="dot" id="wdot"></span></span>
+      <span class="gval" id="wval">--%</span>
+    </div>
+    <div class="bar"><div class="fill" id="wfill"></div></div>
+    <div class="greset" id="wreset">&nbsp;</div>
+  </div>
+
+  <div class="gauge" id="ogauge" style="display:none">
+    <div class="grow">
+      <span class="glabel">D&eacute;passement<span class="dot" id="odot"></span></span>
+      <span class="gval" id="oval">--%</span>
+    </div>
+    <div class="bar"><div class="fill" id="ofill"></div></div>
+    <div class="greset" id="oreset">&nbsp;</div>
+  </div>
+
+  <div id="foot">connexion...</div>
+</div>
+
+<script type="text/javascript">
+(function () {
+  "use strict";
+
+  // ---- Sprite pixel-art de Clawd (16x16) ----------------------------------
+  // . transparent  K contour  O corps  w blanc des yeux  e pupille  p nez rose
+  var SPRITE = [
+    "................",
+    "...KK......KK...",
+    "..KOOK....KOOK..",
+    ".KOOOOOOOOOOOOK.",
+    "KOOOOOOOOOOOOOOK",
+    "KOOwwOOOOOOwwOOK",
+    "KOOweOOOOOOewOOK",
+    "KOOOOOOOOOOOOOOK",
+    "KOOOOOOppOOOOOOK",
+    "KOOOOOOOOOOOOOOK",
+    ".KOOOOOOOOOOOOK.",
+    ".KOOOOOOOOOOOOK.",
+    "KOOOOOOOOOOOOOOK",
+    "KOOwwOOOOOOwwOOK",
+    "KOOOOOOOOOOOOOOK",
+    ".KKKKKKKKKKKKKK."
+  ];
+  var COLORS = {
+    "K": "#2b2433",
+    "O": "#ff9b3d",
+    "w": "#fdfaf3",
+    "e": "#2b2433",
+    "p": "#ff6f91"
+  };
+  var GRID = 16;
+  var BODY_CALM = "#ff9b3d", BODY_HOT = "#ff2e2e";
+
+  // interpolation entre deux couleurs hex -> "rgb(...)"
+  function hexLerp(a, b, f) {
+    function ch(s, i) { return parseInt(s.substr(i, 2), 16); }
+    var r = Math.round(ch(a, 1) + (ch(b, 1) - ch(a, 1)) * f);
+    var g = Math.round(ch(a, 3) + (ch(b, 3) - ch(a, 3)) * f);
+    var bl = Math.round(ch(a, 5) + (ch(b, 5) - ch(a, 5)) * f);
+    return "rgb(" + r + "," + g + "," + bl + ")";
+  }
+
+  var canvas = document.getElementById("cat");
+  var ctx = canvas.getContext("2d");
+
+  // Gestion retina (iPad 4 = dpr 2) pour des pixels nets
+  var dpr = window.devicePixelRatio || 1;
+  var CSS_SIZE = 240;
+  canvas.style.width = CSS_SIZE + "px";
+  canvas.style.height = CSS_SIZE + "px";
+  canvas.width = CSS_SIZE * dpr;
+  canvas.height = CSS_SIZE * dpr;
+  ctx.scale(dpr, dpr);
+
+  var CELL = 12;                       // taille d'un pixel du sprite (px CSS)
+  var SPRITE_PX = GRID * CELL;         // 192
+  var ORIGIN = (CSS_SIZE - SPRITE_PX) / 2;
+
+  // ---- Etat ----------------------------------------------------------------
+  // energy/heat = chaleur (couleur, rougissement, sueur) -> pilote par max(s,w,o)
+  // act        = activite recente (sauts, etincelles, dodo) -> pilote par session 5h
+  var energy = 0, energyTarget = 0;
+  var act = 0, actTarget = 0;
+  var online = true;
+  var sleeping = false;
+  var eyesClosed = false;
+  var t = 0;             // compteur de frames
+  var blinkUntil = 0;
+  var nextBlink = 40;
+  var lookX = 0, lookY = 0;            // direction du regard (-1..1)
+  var lookTX = 0, lookTY = 0;          // cible du regard
+  var nextLook = 60;
+  var prevOffY = 0;                    // pour le squash & stretch
+  var sparks = [];                     // etincelles qui montent
+  var zzz = [];                        // petits Z quand il dort
+  // mode demo : ouvre la page avec ?demo pour voir tous les etats defiler
+  var DEMO = (window.location.search.indexOf("demo") >= 0);
+
+  // ---- Corps (sans les pupilles, dessinees dynamiquement) -----------------
+  function drawSprite(offX, offY, gray) {
+    var r, c, ch, color;
+    for (r = 0; r < SPRITE.length; r++) {
+      var row = SPRITE[r];
+      for (c = 0; c < row.length; c++) {
+        ch = row.charAt(c);
+        if (ch === ".") { continue; }
+        if (ch === "e") { ch = "w"; }                 // pupille dessinee a part
+        if (eyesClosed && ch === "w") { ch = "O"; }
+        color = COLORS[ch] || "#ffffff";
+        if (gray) { color = (ch === "K") ? "#3a3640" : "#5a5560"; }
+        ctx.fillStyle = color;
+        ctx.fillRect(ORIGIN + offX + c * CELL, ORIGIN + offY + r * CELL, CELL, CELL);
+      }
+    }
+    if (eyesClosed && !gray) {                         // yeux fermes : 2 traits
+      ctx.fillStyle = "#2b2433";
+      ctx.fillRect(ORIGIN + offX + 3 * CELL, ORIGIN + offY + 6 * CELL, 2 * CELL, CELL);
+      ctx.fillRect(ORIGIN + offX + 11 * CELL, ORIGIN + offY + 6 * CELL, 2 * CELL, CELL);
+    }
+  }
+
+  function drawEye(ex, offX, offY) {
+    var eyeX = ORIGIN + offX + ex * CELL, eyeY = ORIGIN + offY + 5 * CELL;
+    var eyeW = 2 * CELL, eyeH = 2 * CELL, ps = CELL * 1.15;
+    var px = eyeX + eyeW / 2 + lookX * (eyeW - ps) / 2 - ps / 2;
+    var py = eyeY + eyeH / 2 + lookY * (eyeH - ps) / 2 - ps / 2;
+    ctx.fillStyle = "#2b2433";
+    ctx.fillRect(px, py, ps, ps);
+    ctx.fillStyle = "#fdfaf3";                        // petite lueur dans l'oeil
+    ctx.fillRect(px + ps * 0.12, py + ps * 0.12, ps * 0.3, ps * 0.3);
+  }
+
+  function drawPupils(offX, offY) {
+    if (eyesClosed) { return; }
+    drawEye(3, offX, offY);
+    drawEye(11, offX, offY);
+  }
+
+  function drawTail(offX, offY, gray) {
+    var n = 7, i, frac, x, y, sway, sz;
+    var baseX = ORIGIN + offX + 13.5 * CELL, baseY = ORIGIN + offY + 13 * CELL;
+    var sp = 0.07 + act * 0.28;
+    for (i = n; i >= 0; i--) {
+      frac = i / n;
+      sway = Math.sin(t * sp + frac * 2.6) * CELL * 1.4 * frac;
+      x = baseX + frac * CELL * 3.2;
+      y = baseY - frac * CELL * 3.4 + sway;
+      sz = CELL * (1.15 - 0.45 * frac);
+      ctx.fillStyle = gray ? "#3a3640" : "#2b2433";   // contour
+      ctx.fillRect(x - sz / 2 - 1.5, y - sz / 2 - 1.5, sz + 3, sz + 3);
+      ctx.fillStyle = gray ? "#5a5560" : COLORS.O;    // fourrure (suit la couleur du corps)
+      ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+    }
+  }
+
+  function drawBlushSweat(offX, offY) {
+    // joues rouges quand ca chauffe
+    if (energy > 0.45) {
+      var a = Math.min(0.6, (energy - 0.45) * 1.3);
+      ctx.fillStyle = "rgba(255,90,120," + a.toFixed(2) + ")";
+      ctx.beginPath();
+      ctx.arc(ORIGIN + offX + 2.3 * CELL, ORIGIN + offY + 7.5 * CELL, CELL * 0.9, 0, Math.PI * 2, false);
+      ctx.arc(ORIGIN + offX + 13.7 * CELL, ORIGIN + offY + 7.5 * CELL, CELL * 0.9, 0, Math.PI * 2, false);
+      ctx.fill();
+    }
+    // goutte de sueur quand c'est tres charge
+    if (energy > 0.78) {
+      var loop = 60, ph = (t % loop) / loop;
+      var dx = ORIGIN + offX + 14.2 * CELL;
+      var dy = ORIGIN + offY + (2 + ph * 5) * CELL;
+      ctx.fillStyle = "rgba(120,200,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(dx, dy, CELL * 0.5, 0, Math.PI * 2, false);
+      ctx.fill();
+    }
+  }
+
+  function drawAura(cx, cy) {
+    var hue = Math.round(140 * (1 - energy));   // 140 vert -> 0 rouge
+    var pulse = 1 + 0.12 * Math.sin(t * (0.08 + energy * 0.35));
+    var radius = (90 + energy * 22) * pulse;
+    var g = ctx.createRadialGradient(cx, cy, 8, cx, cy, radius);
+    g.addColorStop(0, "hsla(" + hue + ",90%,55%,0.45)");
+    g.addColorStop(0.6, "hsla(" + hue + ",90%,50%,0.16)");
+    g.addColorStop(1, "hsla(" + hue + ",90%,50%,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2, false);
+    ctx.fill();
+  }
+
+  function updateSparks(cx, cy) {
+    // naissance : d'autant plus que l'activite est haute (rien quand il dort)
+    if (!sleeping && sparks.length < 10 && Math.random() < 0.02 + act * 0.3) {
+      sparks.push({
+        x: cx + (Math.random() - 0.5) * 150,
+        y: cy + 30 + Math.random() * 30,
+        vy: -(0.5 + Math.random() * 1.4) * (0.5 + energy),
+        life: 0, max: 26 + Math.random() * 30,
+        sz: 1.5 + Math.random() * 2.5,
+        hue: Math.round(45 - energy * 45 + Math.random() * 20)
+      });
+    }
+    var i, s, a, keep = [];
+    for (i = 0; i < sparks.length; i++) {
+      s = sparks[i];
+      s.y += s.vy; s.x += Math.sin((t + i) * 0.2) * 0.4; s.life++;
+      if (s.life < s.max) {
+        a = 1 - s.life / s.max;
+        ctx.fillStyle = "hsla(" + s.hue + ",95%,65%," + a.toFixed(2) + ")";
+        ctx.fillRect(s.x - s.sz, s.y - s.sz / 3, s.sz * 2, s.sz / 1.5);  // etoile +
+        ctx.fillRect(s.x - s.sz / 3, s.y - s.sz, s.sz / 1.5, s.sz * 2);
+        keep.push(s);
+      }
+    }
+    sparks = keep;
+  }
+
+  function updateZzz(cx, cy) {
+    if (sleeping && zzz.length < 4 && (t % 36) === 0) {
+      zzz.push({ x: cx + 30, y: cy - 50, life: 0, max: 70, sz: 10 });
+    }
+    var i, z, a, keep = [];
+    for (i = 0; i < zzz.length; i++) {
+      z = zzz[i];
+      z.y -= 0.5; z.x += 0.35; z.life++; z.sz += 0.18;
+      if (z.life < z.max) {
+        a = 1 - z.life / z.max;
+        ctx.fillStyle = "rgba(180,180,210," + a.toFixed(2) + ")";
+        ctx.font = "bold " + Math.round(z.sz) + "px Helvetica, Arial, sans-serif";
+        ctx.fillText("z", z.x, z.y);
+        keep.push(z);
+      }
+    }
+    zzz = keep;
+  }
+
+  function frame() {
+    t++;
+
+    // mode demo : balaye lentement tous les etats 0 -> 100 %
+    if (DEMO) {
+      var ph = (t % 480) / 480;            // ~16 s par cycle
+      actTarget = ph; energyTarget = ph;
+      online = true;
+    }
+
+    energy += (energyTarget - energy) * 0.08;
+    act += (actTarget - act) * 0.08;
+    ctx.clearRect(0, 0, CSS_SIZE, CSS_SIZE);
+    var cx = CSS_SIZE / 2, cy = CSS_SIZE / 2;
+
+    sleeping = online && (act < 0.05);
+
+    // couleur du corps : orange (calme) -> rouge (charge). L'info passe par la couleur.
+    COLORS.O = hexLerp(BODY_CALM, BODY_HOT, Math.min(1, energy * 1.15));
+
+    if (online) { drawAura(cx, cy); }
+
+    // sauts : doux, pilotes par la session. Au repos -> immobile. Pas de tremblement.
+    var speed = 0.08 + act * 0.28;
+    var amp = act * 4.5;                             // mouvement leger
+    var offY = sleeping ? 0 : -Math.abs(Math.sin(t * speed)) * amp;
+    var offX = 0;
+
+    // squash & stretch selon la vitesse verticale + respiration permanente
+    var v = offY - prevOffY; prevOffY = offY;
+    var k = (0.5 + act) * 0.05;
+    var sy = 1 - v * k;
+    sy *= 1 + (sleeping ? 0.05 : 0.02) * Math.sin(t * 0.09);  // il respire
+    if (sy < 0.7) { sy = 0.7; } if (sy > 1.3) { sy = 1.3; }
+    var sx = 1 / sy;
+
+    // clignement aleatoire (pas quand il dort, les yeux sont deja fermes)
+    if (!sleeping && t >= nextBlink && t >= blinkUntil) {
+      blinkUntil = t + 5;
+      nextBlink = t + 60 + Math.floor(Math.random() * 120);
+    }
+    eyesClosed = sleeping || (t < blinkUntil);
+
+    // le regard part de temps en temps ailleurs
+    if (t >= nextLook) {
+      lookTX = (Math.random() - 0.5) * 2;
+      lookTY = (Math.random() - 0.5) * 1.2;
+      nextLook = t + 30 + Math.floor(Math.random() * 90);
+    }
+    lookX += (lookTX - lookX) * 0.15;
+    lookY += (lookTY - lookY) * 0.15;
+
+    // creature : squash applique autour des pattes (pivot bas)
+    var pivotX = cx, pivotY = ORIGIN + 15 * CELL;
+    ctx.save();
+    ctx.translate(pivotX, pivotY);
+    ctx.scale(sx, sy);
+    ctx.translate(-pivotX, -pivotY);
+    drawTail(offX, offY, !online);
+    drawSprite(offX, offY, !online);
+    if (online) {
+      drawPupils(offX, offY);
+      drawBlushSweat(offX, offY);
+    }
+    ctx.restore();
+
+    if (online) { updateSparks(cx, cy); updateZzz(cx, cy); }
+  }
+
+  // ~30 fps : large marge pour le vieux Safari
+  setInterval(frame, 33);
+
+  // ---- Couleur des jauges --------------------------------------------------
+  function barColor(p) {
+    if (p >= 80) { return "#ff4d4d"; }
+    if (p >= 50) { return "#ffb13d"; }
+    return "#4dd17a";
+  }
+
+  function fmtReset(mins) {
+    mins = mins || 0;
+    if (mins <= 0) { return ""; }
+    if (mins < 60) { return "reset dans " + mins + " min"; }
+    var h = Math.floor(mins / 60);
+    var m = mins % 60;
+    return "reset dans " + h + "h" + (m < 10 ? "0" + m : m);
+  }
+
+  // ---- Mise a jour de l'affichage -----------------------------------------
+  function clampPct(p) {
+    p = Number(p);
+    if (isNaN(p)) { p = 0; }
+    if (p < 0) { p = 0; }
+    if (p > 100) { p = 100; }
+    return p;
+  }
+
+  // statut -> couleur + alerte + libelle FR
+  function statusInfo(st) {
+    st = (st || "").toLowerCase();
+    if (st.indexOf("reject") >= 0 || st.indexOf("block") >= 0 ||
+        st.indexOf("exceed") >= 0 || st.indexOf("limit") >= 0) {
+      return { alert: true, color: "#ff4d4d", label: "bloque" };
+    }
+    if (st.indexOf("warning") >= 0 || st.indexOf("warn") >= 0) {
+      return { alert: true, color: "#ffb13d", label: "attention" };
+    }
+    if (st === "allowed") {
+      return { alert: false, color: "#4dd17a", label: "OK" };
+    }
+    return { alert: false, color: "#6f6a60", label: "" };
+  }
+
+  function setGauge(prefix, pct, resetMin, status) {
+    var p = clampPct(pct);
+    document.getElementById(prefix + "val").innerHTML = p + "%";
+    var fill = document.getElementById(prefix + "fill");
+    fill.style.width = p + "%";
+    fill.style.backgroundColor = barColor(p);
+    document.getElementById(prefix + "reset").innerHTML = fmtReset(resetMin) || "&nbsp;";
+    document.getElementById(prefix + "dot").style.backgroundColor = statusInfo(status).color;
+  }
+
+  function setActive(claim) {
+    var map = { "five_hour": "sgauge", "seven_day": "wgauge", "overage": "ogauge" };
+    var ids = ["sgauge", "wgauge", "ogauge"], i, id;
+    var target = map[claim] || "";
+    for (i = 0; i < ids.length; i++) {
+      id = ids[i];
+      var el = document.getElementById(id);
+      var on = (id === target);
+      el.className = on ? "gauge active" : "gauge";
+    }
+  }
+
+  function apply(data) {
+    online = !!data.ok;
+    document.body.className = online ? "" : "offline";
+
+    setGauge("s", data.s, data.sr, data.st);
+    setGauge("w", data.w, data.wr, data.wst);
+
+    // jauge depassement : affichee seulement si pertinente
+    var ov = clampPct(data.o);
+    var ovAlert = statusInfo(data.ost).alert;
+    var showOv = (ov > 0) || ovAlert;
+    document.getElementById("ogauge").style.display = showOv ? "" : "none";
+    if (showOv) { setGauge("o", data.o, data.ore, data.ost); }
+
+    // limite la plus contraignante du moment
+    setActive(online ? data.claim : "");
+
+    // chaleur (couleur/sueur) = pire des compteurs ; activite (sauts/dodo) = session
+    if (!DEMO) {
+      energyTarget = Math.max(clampPct(data.s), clampPct(data.w), ov) / 100;
+      actTarget = Math.max(clampPct(data.s), ov) / 100;
+    }
+
+    // banniere d'alerte (statut global)
+    var banner = document.getElementById("banner");
+    var g = statusInfo(data.g);
+    if (online && g.alert) {
+      banner.style.display = "block";
+      banner.style.background = (g.color === "#ff4d4d") ? "#5a2a2a" : "#5a4a22";
+      banner.style.color = (g.color === "#ff4d4d") ? "#ffd9d9" : "#fff0cf";
+      banner.innerHTML = "⚠ Quota Claude : " + g.label;
+    } else {
+      banner.style.display = "none";
+    }
+
+    var foot = document.getElementById("foot");
+    if (online) {
+      var st = data.st && data.st !== "unknown" ? (" · " + data.st) : "";
+      foot.innerHTML = "a jour" + st;
+    } else {
+      foot.innerHTML = "hors ligne · " + (data.msg || "?");
+    }
+  }
+
+  // ---- Polling via XMLHttpRequest (compatible vieux Safari) ----------------
+  function poll() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/usage.json?_=" + (new Date().getTime()), true);
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState === 4) {
+        if (xhr.status === 200) {
+          try {
+            apply(JSON.parse(xhr.responseText));
+          } catch (e) {
+            document.getElementById("foot").innerHTML = "donnees illisibles";
+          }
+        } else {
+          online = false;
+          document.body.className = "offline";
+          document.getElementById("foot").innerHTML = "serveur injoignable";
+        }
+      }
+    };
+    try { xhr.send(); } catch (e) {}
+  }
+
+  poll();
+  setInterval(poll, 10000);   // rafraichit toutes les 10 s
+
+  // empeche le rebond/scroll tactile
+  document.addEventListener("touchmove", function (e) { e.preventDefault(); }, false);
+})();
+</script>
+</body>
+</html>
